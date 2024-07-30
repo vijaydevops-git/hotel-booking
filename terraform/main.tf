@@ -28,7 +28,7 @@ resource "aws_security_group" "allow_http" {
 }
 
 resource "aws_instance" "flask_app" {
-  ami           = "ami-0c55b159cbfafe1f0" # Replace with your AMI
+  ami           = "ami-00b2b1347d132e107" # Replace with your AMI
   instance_type = var.instance_type
   key_name      = var.key_name
   security_groups = [aws_security_group.allow_http.name]

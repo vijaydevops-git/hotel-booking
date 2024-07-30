@@ -40,7 +40,7 @@ resource "aws_instance" "flask_app" {
               pip3 install flask
               sudo apt install -y git
               cd /home/ubuntu
-              git clone https://github.com/yourusername/your-repo.git
+              git clone https://github.com/vijaydevops-git/hotel-booking.git
               cd your-repo
               python3 app.py &
               EOF

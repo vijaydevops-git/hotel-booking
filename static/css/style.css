@@ -1,0 +1,17 @@
+body {
+  font-family: Arial, sans-serif;
+}
+
+nav a {
+  margin-right: 10px;
+  text-decoration: none;
+  color: #333;
+}
+
+.content {
+  margin: 20px;
+}
+
+h1 {
+  color: #333;
+}

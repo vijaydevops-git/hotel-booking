@@ -1,19 +1,14 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <title>Search</title>
-  </head>
-  <body>
-    <h1>Search</h1>
-    <form action="/search" method="post">
-      <label for="location">Location:</label>
-      <input type="text" id="location" name="location"><br><br>
-      <label for="check_in">Check-in Date:</label>
-      <input type="date" id="check_in" name="check_in"><br><br>
-      <label for="check_out">Check-out Date:</label>
-      <input type="date" id="check_out" name="check_out"><br><br>
-      <input type="submit" value="Search">
-    </form>
-  </body>
-</html>
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+  <h1>Search for Hotels</h1>
+  <form method="post">
+    <label for="location">Location:</label>
+    <input type="text" id="location" name="location"><br><br>
+    <label for="check_in">Check-in Date:</label>
+    <input type="date" id="check_in" name="check_in"><br><br>
+    <label for="check_out">Check-out Date:</label>
+    <input type="date" id="check_out" name="check_out"><br><br>
+    <input type="submit" value="Search">
+  </form>
+{% endblock %}

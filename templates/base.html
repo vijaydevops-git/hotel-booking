@@ -7,13 +7,15 @@
   </head>
   <body>
     <nav>
-      <a href="{{ url_for('home') }}">Home</a>
-      {% if current_user.is_authenticated %}
-        <a href="{{ url_for('logout') }}">Logout</a>
-      {% else %}
-        <a href="{{ url_for('login') }}">Login</a>
-        <a href="{{ url_for('signup') }}">Signup</a>
-      {% endif %}
+      <div>
+        <a href="{{ url_for('home') }}">Home</a>
+        {% if current_user.is_authenticated %}
+          <a href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+          <a href="{{ url_for('login') }}">Login</a>
+          <a href="{{ url_for('signup') }}">Signup</a>
+        {% endif %}
+      </div>
     </nav>
     <div class="content">
       {% block content %}{% endblock %}

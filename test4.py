@@ -1,332 +1,299 @@
 import os
 import subprocess
-import json
+import sys
+import csv
 import datetime
-from collections import defaultdict
+import boto3
+import re
+import json
+from dateutil import parser
 import argparse
 import shutil
-import re
 
-def check_commands(commands):
-    """
-    Check if the necessary commands are installed.
-    """
-    for cmd in commands:
+# Function to check if required commands are installed
+def check_commands(*cmds):
+    for cmd in cmds:
         if not shutil.which(cmd):
-            print(f"ERROR: {cmd} is required but it's not installed. Aborting.\n")
-            exit(1)
+            print(f"ERROR: {cmd} is required but it's not installed. Aborting.")
+            sys.exit(1)
 
-def agedifference(start, end):
-    """
-    Calculate the difference in days between two date strings in the format YYYY-MM-DDTHH:MM:SS.
-    """
+# Function to calculate the difference in days between two dates
+def agedifference(start_date_str, end_date_str):
     try:
-        start_date = datetime.datetime.strptime(start.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-        end_date = datetime.datetime.strptime(end.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-        return (start_date - end_date).days
-    except ValueError as e:
-        print(f"Date Error: {e}")
-        return None
+        start_date = parser.parse(start_date_str)
+        end_date = parser.parse(end_date_str)
+        difference = (start_date - end_date).days
+        return f"{difference} days"
+    except Exception as e:
+        print(f"Error: {e}")
+        return
 
+# Function to check if the AWS session is alive
 def is_session_alive():
-    """
-    Check if the AWS session is still valid by verifying required environment variables and session information.
-    """
-    required_vars = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
-    for var in required_vars:
-        if var not in os.environ:
-            return False
+    if not (os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY') and os.getenv('AWS_SESSION_TOKEN')):
+        return False
 
     try:
-        session_info = subprocess.getoutput("alks session ls 2>/dev/null | grep -v '─' | tr -d '│' | egrep 'ACCOUNT|IAM' | sed -r 's/\\x1B\\[[0-9;]*[a-zA-Z]//g'")
-        if not session_info:
+        session_info = subprocess.check_output(['alks', 'session', 'ls'], stderr=subprocess.DEVNULL).decode('utf-8')
+        session_info = re.sub(r'\x1B\[[0-9;]*[a-zA-Z]', '', session_info)  # Remove ANSI escape sequences
+        session_lines = session_info.splitlines()
+
+        for line in session_lines:
+            if 'IAM' in line:
+                access_key = line.split()[0].replace('*', '')
+                secret_key = line.split()[1].replace('*', '').replace('…', '')
+                break
+        else:
             return False
 
-        session_lines = session_info.split('\n')
-        access_key = session_lines[0].split()[0].replace('*', '')
-        secret_key = session_lines[0].split()[1].replace('*', '').replace('…', '')
-
-        if os.environ["AWS_ACCESS_KEY_ID"].endswith(access_key) and os.environ["AWS_SECRET_ACCESS_KEY"].endswith(secret_key):
+        if os.getenv('AWS_ACCESS_KEY_ID').endswith(access_key) and os.getenv('AWS_SECRET_ACCESS_KEY').endswith(secret_key):
             return True
     except Exception as e:
         print(f"Error checking session: {e}")
-        return False
 
     return False
 
-def open_alks_session(account):
-    """
-    Open an ALKS session for the specified account and set AWS environment variables.
-    """
-    try:
-        result = subprocess.run(
-            f"alks sessions open -a \"{account}\" -r \"Admin\"",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode != 0:
-            print(f"Failed to open ALKS session: {result.stderr}")
-            exit(1)
+# Function to add or update column positions
+column_positions = {}
+csv_data = {}
 
-        # Process the output to set environment variables
-        for line in result.stdout.splitlines():
-            if line.startswith("export "):
-                key_value = line.split(" ")[1].split("=")
-                key = key_value[0]
-                value = key_value[1].strip('"')
-                os.environ[key] = value
-
-        print("[ OK ] ALKS session opened and environment variables set.\n")
-    except Exception as e:
-        print(f"Error opening ALKS session: {e}")
-        exit(1)
-
-def add_column(column_positions, csv_data, col_name, position=None):
-    """
-    Add or update column positions in the CSV data.
-    """
+def add_column(col_name, position=None):
     if position is None:
         position = len(column_positions) + 1
+
     for key in column_positions:
         if column_positions[key] >= position:
             column_positions[key] += 1
-    column_positions[col_name] = position
-    csv_data[f"1,{position}"] = col_name
 
-def addtocsv(csv_data, column_positions, row, col_name, data):
-    """
-    Add data to the CSV, handling column headings if they are missing.
-    """
+    column_positions[col_name] = position
+    header_key = (1, position)
+    csv_data[header_key] = col_name
+
+# Function to add data to CSV
+def add_to_csv(row, col_name, data):
     if col_name not in column_positions:
-        add_column(column_positions, csv_data, col_name)
+        add_column(col_name)
+
     col = column_positions[col_name]
-    key = f"{row},{col}"
+    key = (row, col)
+
     if key in csv_data:
         csv_data[key] += f" {data}"
     else:
         csv_data[key] = data
 
-def generatecsv(csv_data, column_positions, aws_account):
-    """
-    Generate a CSV file from the collected data.
-    """
+# Function to generate CSV
+def generate_csv(aws_account):
     dt = datetime.datetime.now().strftime("%d%B%Y_%H%M%S")
     filename = f"{aws_account}Report_{dt}.csv"
-    try:
-        with open(filename, "w") as file:
-            max_row = max(int(k.split(',')[0]) for k in csv_data.keys())
-            max_col = max(int(k.split(',')[1]) for k in csv_data.keys())
-            for i in range(1, max_row + 1):
-                line = ",".join(csv_data.get(f"{i},{j}", "") for j in range(1, max_col + 1))
-                file.write(line.rstrip(',') + "\n")
-        print(f"\t[ OK ]\n\n\t\tThe CSV file report is generated in  >>> {filename} <<<\n\n")
-    except Exception as e:
-        print(f"Error generating CSV: {e}")
 
-def chkalltags(instance_id, region, row, env, csv_data, column_positions, TagstobeCheckedProd, TagstobeCheckedNONProd):
-    """
-    Check all required tags for an instance and add missing tags to the CSV.
-    """
-    tags_to_check = TagstobeCheckedProd if env == "prod" else TagstobeCheckedNONProd
-    for tagcheck in tags_to_check:
-        try:
-            result = subprocess.getoutput(f"aws ec2 describe-tags --filters Name=resource-type,Values=instance Name=resource-id,Values={instance_id} --region {region} | jq -r \".Tags[] | select(.Key=='{tagcheck}') | .Value\"")
-            if not result:
-                print(f"\tError: Tag missing {tagcheck}")
-                addtocsv(csv_data, column_positions, row, 'Tags missing', f"Missing: {tagcheck}")
-        except Exception as e:
-            print(f"Error checking tag {tagcheck}: {e}")
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        max_row = max(key[0] for key in csv_data.keys())
+        max_col = max(key[1] for key in csv_data.keys())
 
-def checkspecialtag(instance_id, region, tagcheck):
-    """
-    Check if a specific tag is present for an instance.
-    """
-    try:
-        result = subprocess.getoutput(f"aws ec2 describe-tags --filters Name=resource-type,Values=instance Name=resource-id,Values={instance_id} --region {region} | jq -r \".Tags[] | select(.Key=='{tagcheck}') | .Value\"")
-        return bool(result)
-    except Exception as e:
-        print(f"Error checking special tag {tagcheck}: {e}")
-        return False
+        for i in range(1, max_row + 1):
+            row = [csv_data.get((i, j), '') for j in range(1, max_col + 1)]
+            writer.writerow(row)
 
-def checkPatchStatus(instance_id, region, row, csv_data, column_positions):
-    """
-    Check the patch status of an instance and update the CSV with the findings.
-    """
-    print("Checking on Patches:")
-    ok = 0
+    print(f"\n\n\t\t The CSV file report is generated in  >>> {filename} <<< \n\n")
 
-    try:
-        ssmdata = subprocess.getoutput(f"aws ssm describe-instance-patch-states --instance-ids {instance_id} --region {region}")
-        ssmdata_json = json.loads(ssmdata)
-        installed_pending_reboot = ssmdata_json["InstancePatchStates"][0]["InstalledPendingRebootCount"]
-        missing_count = ssmdata_json["InstancePatchStates"][0]["MissingCount"]
+# Function to check all required tags for an instance
+def chk_all_tags(tocheckinstance, tocheckregion, row, tags_to_be_checked):
+    client = boto3.client('ec2', region_name=tocheckregion)
+    response = client.describe_tags(Filters=[
+        {'Name': 'resource-type', 'Values': ['instance']},
+        {'Name': 'resource-id', 'Values': [tocheckinstance]}
+    ])
 
-        if installed_pending_reboot == 0:
-            ok += 1
-        else:
-            print("\tError: InstalledPendingRebootCount issue Non-Compliant: This instance needs to rebooted for the patches to be applied.")
-            if checkspecialtag(instance_id, region, "company-ssm-managed-patch-install-reboot"):
-                addtocsv(csv_data, column_positions, row, 'Tags missing', "company-ssm-managed-patch-install-reboot")
-                print("\tInfo: Tag company-ssm-managed-patch-install-reboot is true. Seems like PatchManager needs to recheck in next run. Ignore this instance for now.")
+    tags = {tag['Key']: tag['Value'] for tag in response['Tags']}
+    missing_tags = [tag for tag in tags_to_be_checked if tag not in tags]
+
+    for tag in missing_tags:
+        add_to_csv(row, 'Tags missing', f"Missing: {tag}")
+
+# Function to check a specific tag
+def check_special_tag(tocheckinstance, tocheckregion, tagcheck):
+    client = boto3.client('ec2', region_name=tocheckregion)
+    response = client.describe_tags(Filters=[
+        {'Name': 'resource-type', 'Values': ['instance']},
+        {'Name': 'resource-id', 'Values': [tocheckinstance]},
+        {'Name': 'key', 'Values': [tagcheck]}
+    ])
+    return len(response['Tags']) > 0
+
+# Function to check the patch status of an instance
+def check_patch_status(tocheckinstance, tocheckregion, row):
+    client = boto3.client('ssm', region_name=tocheckregion)
+    response = client.describe_instance_patch_states(InstanceIds=[tocheckinstance])
+    patch_state = response['InstancePatchStates'][0]
+
+    installed_pending_reboot_count = patch_state['InstalledPendingRebootCount']
+    missing_count = patch_state['MissingCount']
+
+    if installed_pending_reboot_count == 0 and missing_count == 0:
+        add_to_csv(row, 'Patch Status', 'Compliant')
+        add_to_csv(row, 'Patch required action', 'Patches are applied')
+    else:
+        if installed_pending_reboot_count > 0:
+            if check_special_tag(tocheckinstance, tocheckregion, "coxauto-ssm-managed-patch-install-reboot"):
+                add_to_csv(row, 'Tags missing', "coxauto-ssm-managed-patch-install-reboot")
             else:
-                addtocsv(csv_data, column_positions, row, 'Tags missing', "company-ssm-managed-patch-install-reboot.")
-                print("\tError: Required TAG missing: company-ssm-managed-patch-install-reboot.")
+                add_to_csv(row, 'Tags missing', "Required TAG missing: coxauto-ssm-managed-patch-install-reboot.")
 
-        if missing_count == 0:
-            ok += 1
+        if missing_count > 0:
+            add_to_csv(row, 'Patch Status', 'Non-Compliant')
+            add_to_csv(row, 'Patch required action', 'Patches are required to be applied')
 
-        if ok > 1:
-            addtocsv(csv_data, column_positions, row, 'Patch required action', "Patches are applied")
-            addtocsv(csv_data, column_positions, row, 'Patch Status', "Compliant")
-            print("\t All patches applied and instance is Compliant [ OK ]")
-        else:
-            print("\tError: MissingCount. Non-Compliant: Patches are not applied, This instance need urgent attention.")
-            addtocsv(csv_data, column_positions, row, 'Patch required action', "Patches are required to be applied")
-            addtocsv(csv_data, column_positions, row, 'Patch Status', "Non-Compliant")
-    except Exception as e:
-        print(f"Error checking patch status: {e}")
+# Function to check the AMI status of an instance
+def check_instance_ami(tocheckinstance, tocheckregion, row):
+    ec2 = boto3.client('ec2', region_name=tocheckregion)
+    instance_details = ec2.describe_instances(InstanceIds=[tocheckinstance])
+    instance = instance_details['Reservations'][0]['Instances'][0]
+    ami_id = instance['ImageId']
+    ami_details = ec2.describe_images(ImageIds=[ami_id])['Images'][0]
 
-def check_instance_ami(instance_details, instance_id, region, row, csv_data, column_positions):
-    """
-    Check the AMI details of an instance and suggest updates if needed.
-    """
-    print(f"Current AMI ID of the instance: {instance_id}")
+    ami_name = ami_details['Name']
+    is_public = ami_details['Public']
+    creation_date = ami_details['CreationDate']
 
-    try:
-        ami_id = next((i["ImageId"] for r in instance_details["Reservations"] for i in r["Instances"] if i["InstanceId"] == instance_id), None)
-        ami_info = json.loads(subprocess.getoutput(f"aws ec2 describe-images --image-ids {ami_id} --region {region} --query 'Images[0]' --output json"))
-        ami_name = ami_info["Name"]
-        is_public = ami_info["Public"]
-        creation_date = ami_info["CreationDate"]
+    add_to_csv(row, 'Current AMI-name', ami_name)
+    add_to_csv(row, 'Current AMI-ID', ami_id)
+    add_to_csv(row, 'AMI_Visibility', 'Public' if is_public else 'Private')
+    add_to_csv(row, 'AMI creation date', creation_date)
 
-        addtocsv(csv_data, column_positions, row, "Current AMI-name", ami_name)
-        addtocsv(csv_data, column_positions, row, "Current AMI-ID", ami_id)
-        addtocsv(csv_data, column_positions, row, "AMI_Visibility", "Public" if is_public else "Private")
+    if not is_public:
+        return
 
-        asg_info = json.loads(subprocess.getoutput(f"aws autoscaling describe-auto-scaling-instances --instance-ids {instance_id} --region {region} --query 'AutoScalingInstances[0]' --output json"))
-        asg_name = asg_info.get("AutoScalingGroupName", "Not in ASG")
-        addtocsv(csv_data, column_positions, row, "ASG Name", asg_name)
+    ami_name_pattern = re.sub(r'\d{8}', '*', ami_name)
+    latest_ami_info = ec2.describe_images(
+        Owners=['amazon'],
+        Filters=[{'Name': 'name', 'Values': [ami_name_pattern]}]
+    )['Images']
 
-        if not is_public:
-            print("\tThe AMI is private. No further checks.")
-            return
+    if not latest_ami_info:
+        add_to_csv(row, 'AMI update suggestion', 'Error: Unable to get the latest AMI information.')
+        return
 
-        ami_name_pattern = re.sub(r'[0-9]{8}', '*', ami_name)
-        latest_ami_info = json.loads(subprocess.getoutput(f"aws ec2 describe-images --region {region} --owners amazon --filters 'Name=name,Values={ami_name_pattern}' --query 'Images | sort_by(@, &CreationDate) | [-1]' --output json"))
+    latest_ami_info = sorted(latest_ami_info, key=lambda x: x['CreationDate'], reverse=True)[0]
+    latest_ami_name = latest_ami_info['Name']
+    latest_ami_id = latest_ami_info['ImageId']
+    latest_ami_date = latest_ami_info['CreationDate']
 
-        if not latest_ami_info:
-            print("\tError: Unable to get the latest AMI information.")
-            addtocsv(csv_data, column_positions, row, "AMI update suggestion", "Error: Unable to get the latest AMI information.")
-            return
+    add_to_csv(row, 'Latest AMI-ID', latest_ami_id)
+    add_to_csv(row, 'Latest AMI creation date', latest_ami_date)
 
-        latest_ami_name = latest_ami_info["Name"]
-        latest_ami_id = latest_ami_info["ImageId"]
-        latest_ami_date = latest_ami_info["CreationDate"]
+    if creation_date == latest_ami_date:
+        add_to_csv(row, 'AMI update suggestion', 'Already at Latest')
+        add_to_csv(row, 'AMI age', 'No Difference')
+    else:
+        age_diff = agedifference(latest_ami_date, creation_date)
+        add_to_csv(row, 'AMI update suggestion', latest_ami_name)
+        add_to_csv(row, 'AMI age', age_diff)
 
-        addtocsv(csv_data, column_positions, row, "Latest AMI-ID", latest_ami_id)
-        addtocsv(csv_data, column_positions, row, "Latest AMI creation date", latest_ami_date)
-
-        if creation_date == latest_ami_date:
-            addtocsv(csv_data, column_positions, row, "AMI update suggestion", "Already at Latest")
-            addtocsv(csv_data, column_positions, row, "AMI age", "No Difference")
-        else:
-            addtocsv(csv_data, column_positions, row, "AMI update suggestion", latest_ami_name)
-            age_diff = agedifference(latest_ami_date, creation_date)
-            addtocsv(csv_data, column_positions, row, "AMI age", f"{age_diff} days")
-    except Exception as e:
-        print(f"Error checking AMI details: {e}")
-
+# Main function
 def main():
-    parser = argparse.ArgumentParser(description="PatchManager Checks")
-    parser.add_argument("-e", "--environment", required=True, help="Specify the environment (prod or non-prod)")
-    parser.add_argument("-a", "--aws-account", required=True, help="Specify the AWS account ID example awsacs awsnamecompany")
+    print("\t\tWelcome to PatchManager Checks ...")
+    print('''
+     _|_|_|                _|                _|              _|_|_|  _|                            _|                            
+     _|    _|    _|_|_|  _|_|_|_|    _|_|_|  _|_|_|        _|        _|_|_|      _|_|      _|_|_|  _|  _|      _|_|    _|  _|_|  
+     _|_|_|    _|    _|    _|      _|        _|    _|      _|        _|    _|  _|_|_|_|  _|        _|_|      _|_|_|_|  _|_|      
+     _|        _|    _|    _|      _|        _|    _|      _|        _|    _|  _|        _|        _|  _|    _|        _|        
+     _|          _|_|_|      _|_|    _|_|_|  _|    _|        _|_|_|  _|    _|    _|_|_|    _|_|_|  _|    _|    _|_|_|  _|        
+    ''')
+
+    parser = argparse.ArgumentParser(description='PatchManager Checks')
+    parser.add_argument('-e', '--environment', required=True, help='Specify the environment (prod or non-prod)')
+    parser.add_argument('-a', '--aws-account', required=True, help='Specify the AWS account ID example awsaccount2 awsaccount')
+
     args = parser.parse_args()
 
-    ENV = args.environment
-    AWS_ACCOUNT = args.aws_account
+    env = args.environment
+    aws_account = args.aws_account
 
-    if ENV == "non-prod" and not AWS_ACCOUNT.endswith("np"):
-        AWS_ACCOUNT += "np"
+    if env == 'non-prod' and not aws_account.endswith('np'):
+        aws_account += 'np'
 
-    # Step 1: Check if essential commands are installed
-    check_commands(["aws", "jq", "alks", "sed", "awk", "grep"])
-    print("Checking if essential commands are installed:\t[ OK ]\n")
+    check_commands('aws', 'jq', 'alks', 'sed', 'awk', 'grep')
+    print("Checking if essential commands are installed:\t[ OK ]")
 
-    # Step 2: Check AWS session and get session if needed
-    account = subprocess.getoutput(f"alks developer accounts 2>/dev/null | grep {AWS_ACCOUNT} | grep ALKSAdmin | awk '{{ printf(\"%s %s %s\",$2,$3,$4) }}'")
+    try:
+        account_output = subprocess.check_output(['alks', 'developer', 'accounts'], stderr=subprocess.DEVNULL).decode('utf-8')
+        account_match = re.search(rf'{aws_account}\s+ALKSAdmin\s+(\S+)', account_output)
+        if account_match:
+            account = account_match.group(1)
+        else:
+            print(f"Error: Could not find account information for {aws_account}")
+            sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to get account information - {e}")
+        sys.exit(1)
+
     print(f"Checking AWS session for {account} and Admin")
 
     if not is_session_alive():
-        print("[ Error ] \nAWS session has expired. Now trying to get sessions.")
-        open_alks_session(account)
+        print("[ Error ] AWS session has expired. Now trying to get sessions.")
+        try:
+            subprocess.call(['alks', 'sessions', 'open', '-a', account, '-r', 'Admin'], stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError as e:
+            print(f"Error: Failed to open session - {e}")
+            sys.exit(1)
         if not is_session_alive():
-            print(f"[ Error ]\nPossibly you do not have access to {AWS_ACCOUNT} as Admin. Admin access is needed to perform Patch checking.")
-            exit(1)
-    print("[ OK ]\n")
+            print(f"[ Error ] Possibly you do not have access to {aws_account} as Admin. Admin access is needed to perform Patch checking.")
+            sys.exit(1)
 
-    # Step 3: Initialize column positions and CSV data
-    column_positions = {}
-    csv_data = defaultdict(str)
-
-    add_column(column_positions, csv_data, 'InstanceID', 1)
-    add_column(column_positions, csv_data, 'Instance Name', 2)
-    add_column(column_positions, csv_data, 'Instance State', 3)
-    add_column(column_positions, csv_data, 'Region', 4)
-    add_column(column_positions, csv_data, 'Patch Status', 5)
-    add_column(column_positions, csv_data, 'Patch required action', 6)
-    add_column(column_positions, csv_data, 'Tags missing', 7)
-    add_column(column_positions, csv_data, 'Current AMI-name', 8)
-    add_column(column_positions, csv_data, 'Current AMI-ID', 9)
-    add_column(column_positions, csv_data, 'AMI_Visibility', 10)
-    add_column(column_positions, csv_data, 'AMI update suggestion', 11)
-    add_column(column_positions, csv_data, 'Latest AMI-ID', 12)
-    add_column(column_positions, csv_data, 'Latest AMI creation date', 13)
-    add_column(column_positions, csv_data, 'AMI age', 14)
-    add_column(column_positions, csv_data, 'ASG Name', 15)
-    add_column(column_positions, csv_data, 'Notes', 16)
+    add_column('InstanceID', 1)
+    add_column('Instance Name', 2)
+    add_column('Instance State', 3)
+    add_column('Region', 4)
+    add_column('Patch Status', 5)
+    add_column('Patch required action', 6)
+    add_column('Tags missing', 7)
+    add_column('Current AMI-name', 8)
+    add_column('Current AMI-ID', 9)
+    add_column('AMI_Visibility', 10)
+    add_column('AMI update suggestion', 11)
+    add_column('Latest AMI-ID', 12)
+    add_column('Latest AMI creation date', 13)
+    add_column('AMI age', 14)
+    add_column('ASG Name', 15)
+    add_column('Notes', 16)
 
     row = 2
 
-    # Step 4: Process instances in specified regions
-    regions = ["us-east-1", "us-west-2", "us-west-1"]
-    for region in regions:
-        try:
-            instance_details = json.loads(subprocess.getoutput(f"aws ec2 describe-instances --region {region}"))
-            for reservation in instance_details["Reservations"]:
-                for instance in reservation["Instances"]:
-                    instance_id = instance["InstanceId"]
-                    instance_name = next((tag["Value"] for tag in instance["Tags"] if tag["Key"] == "Name"), "N/A")
-                    state = instance["State"]["Name"]
-                    print(f"\n\nNow working: {instance_id} {region}")
-                    print(f"\tThis {instance_name} ({instance_id}) is in >> {state} Status <<:")
+    ec2_client = boto3.client('ec2')
+    regions = ['us-east-1', 'us-west-2', 'us-west-1']
 
-                    if state == "running":
-                        addtocsv(csv_data, column_positions, row, "InstanceID", instance_id)
-                        addtocsv(csv_data, column_positions, row, 'Instance Name', instance_name)
-                        addtocsv(csv_data, column_positions, row, 'Instance State', "Running")
-                        addtocsv(csv_data, column_positions, row, "Region", region)
-                        checkPatchStatus(instance_id, region, row, csv_data, column_positions)
-                        chkalltags(instance_id, region, row, ENV, csv_data, column_positions, 
-                                   ["company-ssm-managed-patch-install-no-reboot"], 
-                                   ["company-ssm-managed-patch-install-reboot", "company:ssm:managed-qualys-install-linux", "company:ssm:managed-crowdstrike-install", "company-ssm-managed-scan"])
-                        check_instance_ami(instance_details, instance_id, region, row, csv_data, column_positions)
-                        row += 1
-                    elif state == "stopped":
-                        addtocsv(csv_data, column_positions, row, "InstanceID", instance_id)
-                        addtocsv(csv_data, column_positions, row, 'Instance Name', instance_name)
-                        addtocsv(csv_data, column_positions, row, "Instance State", "Stopped")
-                        addtocsv(csv_data, column_positions, row, "Region", region)
-                        row += 1
-                    else:
-                        print(f"\tThis {instance_name} ({instance_id}) is in >> {state} Status << No Checks further and will NOT be on Report.\n")
-        except Exception as e:
-            print(f"Error processing region {region}: {e}")
+    for ec2region in regions:
+        response = ec2_client.describe_instances(Filters=[{'Name': 'instance-state-name', 'Values': ['running', 'stopped']}], RegionName=ec2region)
+        for reservation in response['Reservations']:
+            for instance in reservation['Instances']:
+                instance_id = instance['InstanceId']
+                instance_name = next(tag['Value'] for tag in instance['Tags'] if tag['Key'] == 'Name')
+                state = instance['State']['Name']
 
-    # Step 5: Generate CSV report
+                add_to_csv(row, 'InstanceID', instance_id)
+                add_to_csv(row, 'Instance Name', instance_name)
+                add_to_csv(row, 'Region', ec2region)
+
+                if state == 'running':
+                    add_to_csv(row, 'Instance State', 'Running')
+                    check_patch_status(instance_id, ec2region, row)
+                    tags_to_be_checked = [
+                        "coxauto-ssm-managed-patch-install-reboot",
+                        "coxauto:ssm:managed-qualys-install-linux",
+                        "coxauto:ssm:managed-crowdstrike-install",
+                        "coxauto-ssm-managed-scan"
+                    ]
+                    chk_all_tags(instance_id, ec2region, row, tags_to_be_checked)
+                    check_instance_ami(instance_id, ec2region, row)
+                    row += 1
+                elif state == 'stopped':
+                    add_to_csv(row, 'Instance State', 'Stopped')
+                    row += 1
+
+    generate_csv(aws_account)
     print("Now Generating CSV .. ")
-    generatecsv(csv_data, column_positions, AWS_ACCOUNT)
 
 if __name__ == "__main__":
     main()

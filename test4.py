@@ -221,13 +221,14 @@ def main():
         account_output = subprocess.check_output(['alks', 'developer', 'accounts'], stderr=subprocess.DEVNULL).decode('utf-8')
         print(f"Account Output:\n{account_output}")  # Debugging line to print account output
         account_lines = account_output.splitlines()
+        account = None
         for line in account_lines:
             if aws_account in line and 'ALKSAdmin' in line:
                 account_parts = line.split()
                 account = f"{account_parts[1]} {account_parts[2]} {account_parts[3]}"
                 print(f"Matched Account: {account}")  # Debugging line to print matched account
                 break
-        else:
+        if account is None:
             print(f"Error: Could not find account information for {aws_account}")
             sys.exit(1)
     except subprocess.CalledProcessError as e:

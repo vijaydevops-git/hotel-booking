@@ -219,9 +219,11 @@ def main():
 
     try:
         account_output = subprocess.check_output(['alks', 'developer', 'accounts'], stderr=subprocess.DEVNULL).decode('utf-8')
+        print(f"Account Output: {account_output}")  # Debugging line to print account output
         account_match = re.search(rf'{aws_account}\s+ALKSAdmin\s+(\S+)', account_output)
         if account_match:
             account = account_match.group(1)
+            print(f"Account Match Found: {account}")  # Debugging line to print matched account
         else:
             print(f"Error: Could not find account information for {aws_account}")
             sys.exit(1)

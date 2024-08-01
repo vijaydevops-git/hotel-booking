@@ -219,11 +219,14 @@ def main():
 
     try:
         account_output = subprocess.check_output(['alks', 'developer', 'accounts'], stderr=subprocess.DEVNULL).decode('utf-8')
-        print(f"Account Output: {account_output}")  # Debugging line to print account output
-        account_match = re.search(rf'{aws_account}\s+ALKSAdmin\s+(\S+)', account_output)
-        if account_match:
-            account = account_match.group(1)
-            print(f"Account Match Found: {account}")  # Debugging line to print matched account
+        print(f"Account Output:\n{account_output}")  # Debugging line to print account output
+        account_lines = account_output.splitlines()
+        for line in account_lines:
+            if aws_account in line and 'ALKSAdmin' in line:
+                account_parts = line.split()
+                account = f"{account_parts[1]} {account_parts[2]} {account_parts[3]}"
+                print(f"Matched Account: {account}")  # Debugging line to print matched account
+                break
         else:
             print(f"Error: Could not find account information for {aws_account}")
             sys.exit(1)

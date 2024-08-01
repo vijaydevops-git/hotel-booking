@@ -70,9 +70,9 @@ def open_alks_session(account):
             print(f"Failed to open ALKS session: {result.stderr}")
             exit(1)
 
-        output_lines = result.stdout.split('\n')
-        for line in output_lines:
-            if line.startswith("export"):
+        # Process the output to set environment variables
+        for line in result.stdout.splitlines():
+            if line.startswith("export "):
                 key_value = line.split(" ")[1].split("=")
                 key = key_value[0]
                 value = key_value[1].strip('"')

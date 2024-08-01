@@ -28,38 +28,6 @@ def agedifference(start_date_str, end_date_str):
         print(f"Error: {e}")
         return
 
-# Function to check if the AWS session is alive
-def is_session_alive():
-    aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-    aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-    aws_session_token = os.getenv('AWS_SESSION_TOKEN')
-
-    if not (aws_access_key_id and aws_secret_access_key and aws_session_token):
-        print("AWS environment variables are not set")
-        return False
-
-    try:
-        session_info = subprocess.check_output(['alks', 'session', 'ls'], stderr=subprocess.DEVNULL).decode('utf-8')
-        session_info = re.sub(r'\x1B\[[0-9;]*[a-zA-Z]', '', session_info)  # Remove ANSI escape sequences
-        print(f"Session Info:\n{session_info}")  # Debugging line to print session info
-        session_lines = session_info.splitlines()
-
-        for line in session_lines:
-            if 'IAM' in line:
-                access_key = line.split()[0].replace('*', '')
-                secret_key = line.split()[1].replace('*', '').replace('…', '')
-                break
-        else:
-            print("No IAM session found")
-            return False
-
-        if aws_access_key_id.endswith(access_key) and aws_secret_access_key.endswith(secret_key):
-            return True
-    except Exception as e:
-        print(f"Error checking session: {e}")
-
-    return False
-
 # Function to add or update column positions
 column_positions = {}
 csv_data = {}
@@ -221,40 +189,8 @@ def main():
     if env == 'non-prod' and not aws_account.endswith('np'):
         aws_account += 'np'
 
-    check_commands('aws', 'jq', 'alks', 'sed', 'awk', 'grep')
+    check_commands('aws', 'jq', 'sed', 'awk', 'grep')
     print("Checking if essential commands are installed:\t[ OK ]")
-
-    try:
-        account_output = subprocess.check_output(['alks', 'developer', 'accounts'], stderr=subprocess.DEVNULL).decode('utf-8')
-        print(f"Account Output:\n{account_output}")  # Debugging line to print account output
-        account_lines = account_output.splitlines()
-        account = None
-        for line in account_lines:
-            if aws_account in line and 'ALKSAdmin' in line:
-                account_parts = line.split()
-                account = f"{account_parts[1]} {account_parts[2]} {account_parts[3]}"
-                print(f"Matched Account: {account}")  # Debugging line to print matched account
-                break
-        if account is None:
-            print(f"Error: Could not find account information for {aws_account}")
-            sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to get account information - {e}")
-        sys.exit(1)
-
-    print(f"Checking AWS session for {account} and Admin")
-
-    if not is_session_alive():
-        print("[ Error ] AWS session has expired. Now trying to get sessions.")
-        try:
-            output = subprocess.check_output(['alks', 'sessions', 'open', '-a', account, '-r', 'Admin'], stderr=subprocess.STDOUT).decode('utf-8')
-            print(f"Session open output:\n{output}")
-        except subprocess.CalledProcessError as e:
-            print(f"Error: Failed to open session - {e.output.decode('utf-8')}")
-            sys.exit(1)
-        if not is_session_alive():
-            print(f"[ Error ] Possibly you do not have access to {aws_account} as Admin. Admin access is needed to perform Patch checking.")
-            sys.exit(1)
 
     add_column('InstanceID', 1)
     add_column('Instance Name', 2)

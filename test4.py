@@ -30,12 +30,18 @@ def agedifference(start_date_str, end_date_str):
 
 # Function to check if the AWS session is alive
 def is_session_alive():
-    if not (os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY') and os.getenv('AWS_SESSION_TOKEN')):
+    aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+    aws_session_token = os.getenv('AWS_SESSION_TOKEN')
+
+    if not (aws_access_key_id and aws_secret_access_key and aws_session_token):
+        print("AWS environment variables are not set")
         return False
 
     try:
         session_info = subprocess.check_output(['alks', 'session', 'ls'], stderr=subprocess.DEVNULL).decode('utf-8')
         session_info = re.sub(r'\x1B\[[0-9;]*[a-zA-Z]', '', session_info)  # Remove ANSI escape sequences
+        print(f"Session Info:\n{session_info}")  # Debugging line to print session info
         session_lines = session_info.splitlines()
 
         for line in session_lines:
@@ -44,9 +50,10 @@ def is_session_alive():
                 secret_key = line.split()[1].replace('*', '').replace('…', '')
                 break
         else:
+            print("No IAM session found")
             return False
 
-        if os.getenv('AWS_ACCESS_KEY_ID').endswith(access_key) and os.getenv('AWS_SECRET_ACCESS_KEY').endswith(secret_key):
+        if aws_access_key_id.endswith(access_key) and aws_secret_access_key.endswith(secret_key):
             return True
     except Exception as e:
         print(f"Error checking session: {e}")
@@ -240,9 +247,10 @@ def main():
     if not is_session_alive():
         print("[ Error ] AWS session has expired. Now trying to get sessions.")
         try:
-            subprocess.call(['alks', 'sessions', 'open', '-a', account, '-r', 'Admin'], stderr=subprocess.DEVNULL)
+            output = subprocess.check_output(['alks', 'sessions', 'open', '-a', account, '-r', 'Admin'], stderr=subprocess.STDOUT).decode('utf-8')
+            print(f"Session open output:\n{output}")
         except subprocess.CalledProcessError as e:
-            print(f"Error: Failed to open session - {e}")
+            print(f"Error: Failed to open session - {e.output.decode('utf-8')}")
             sys.exit(1)
         if not is_session_alive():
             print(f"[ Error ] Possibly you do not have access to {aws_account} as Admin. Admin access is needed to perform Patch checking.")

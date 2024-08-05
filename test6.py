@@ -48,11 +48,11 @@ def get_latest_ami(ami_name, region):
         images = sorted(response['Images'], key=lambda x: datetime.strptime(x['CreationDate'], '%Y-%m-%dT%H:%M:%S.%fZ'), reverse=True)
         if images:
             latest_ami_info = images[0]
-            return latest_ami_info['ImageId'], latest_ami_info['Name'], latest_ami_info['CreationDate']
+            return latest_ami_info['ImageId'], latest_ami_info['Name']
         else:
-            return "Error: AMI might be too old or unable to get correct pattern.", "N/A", "N/A"
+            return "Error: AMI might be too old or unable to get correct pattern.", "N/A"
     except Exception as e:
-        return f"Error: Unable to get the latest AMI information. {str(e)}", "N/A", "N/A"
+        return f"Error: Unable to get the latest AMI information. {str(e)}", "N/A"
 
 def check_patch_status(instance_id, region, row, data_store):
     try:
@@ -115,8 +115,7 @@ def get_instance_details():
             if asg_response['AutoScalingInstances']:
                 asg_name = asg_response['AutoScalingInstances'][0]['AutoScalingGroupName']
 
-            latest_ami_id, latest_ami_name, latest_ami_creation_date = get_latest_ami(ami_name, region)
-            latest_ami_age = agedifference(datetime.now().strftime('%Y-%m-%dT%H:%M:%S'), latest_ami_creation_date)
+            latest_ami_id, latest_ami_name = get_latest_ami(ami_name, region)
 
             add_to_csv("Instance ID", instance_id , row, data_store)
             add_to_csv("Instance Name", instance_name , row, data_store)
@@ -126,14 +125,10 @@ def get_instance_details():
             add_to_csv("Current AMI ID",  ami_id , row, data_store)
             add_to_csv("Latest AMI ID", latest_ami_id , row, data_store)
             add_to_csv("Latest AMI Name", latest_ami_name , row, data_store)
-            add_to_csv("Latest AMI Creation Date", latest_ami_creation_date , row, data_store)
             add_to_csv("AMI Age in days", ami_age , row, data_store)
             add_to_csv("AMI Visibility", ami_visibility, row, data_store)
             add_to_csv("ASG Name",  asg_name , row, data_store)
             add_to_csv("Timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row, data_store)
-
-            if latest_ami_age > 59:
-                add_to_csv("Notes", "Action required to update to latest AMI", row, data_store)
 
             check_patch_status(instance_id, region, row, data_store)
             check_tags(instance_id, region, row, required_tags, data_store)
@@ -146,13 +141,10 @@ def get_instance_details():
             print(f"Current AMI ID: {ami_id}")
             print(f"Latest AMI ID: {latest_ami_id}")
             print(f"Latest AMI Name: {latest_ami_name}")
-            print(f"Latest AMI Creation Date: {latest_ami_creation_date}")
             print(f"AMI Age: {ami_age} days")
             print(f"AMI Visibility: {ami_visibility}")
             print(f"ASG Name: {asg_name}")
             print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            if latest_ami_age > 59:
-                print("Notes: Action required to update to latest AMI")
             print("------")
 
             row += 1
